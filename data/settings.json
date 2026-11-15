@@ -1,0 +1,33 @@
+{
+  "_comment": "默认房间规则。房主开局前可以改其中一部分，改完的数值存在房间里。",
+  "startingMoney": 1500,
+  "goSalary": 200,
+  "maxPlayers": 6,
+  "minPlayers": 2,
+  "disconnectGraceMs": 20000,
+  "hostGraceMs": 20000,
+  "auctionSeconds": 15,
+  "auctionExtendSeconds": 5,
+  "auctionMaxSeconds": 30,
+  "currency": "¥",
+  "playerColors": [
+    { "id": "red", "hex": "#e24b4b", "label": "赤" },
+    { "id": "orange", "hex": "#f08a24", "label": "橙" },
+    { "id": "yellow", "hex": "#e6b325", "label": "黄" },
+    { "id": "green", "hex": "#2f9e6b", "label": "绿" },
+    { "id": "teal", "hex": "#2aa9b8", "label": "青" },
+    { "id": "blue", "hex": "#3b6cff", "label": "蓝" },
+    { "id": "purple", "hex": "#8a5cff", "label": "紫" },
+    { "id": "pink", "hex": "#e25b8a", "label": "粉" }
+  ],
+  "avatars": [
+    { "id": "pebble", "label": "圆子" },
+    { "id": "tile", "label": "方块" },
+    { "id": "gem", "label": "菱形" },
+    { "id": "sail", "label": "三角" },
+    { "id": "hive", "label": "六边" },
+    { "id": "star", "label": "星星" },
+    { "id": "ring", "label": "圆环" },
+    { "id": "bolt", "label": "十字" }
+  ]
+}
