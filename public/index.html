@@ -4,46 +4,113 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>大富翁</title>
-    <meta name="description" content="中国城市联机大富翁。输入房间号和昵称就能开局，无需注册。" />
-    <meta name="theme-color" content="#eef3f8" />
+    <meta name="description" content="中国城市联机大富翁。发个邀请链接就能开局，无需注册。" />
+    <meta name="theme-color" content="#0f1c18" />
     <link rel="icon" href="/favicon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=ZCOOL+XiaoWei&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
     <div id="toast" role="status"></div>
+
     <main id="home" class="home">
-      <form class="ticket" id="join-form">
-        <div class="seal" aria-hidden="true">骰</div>
-        <p class="eyebrow">中国城市 · 联机对战</p>
-        <h1>大富翁</h1>
-        <p class="lede">两到六人，同一房间号。房主一点开始，骰子在服务器上摇。</p>
-        <ol class="steps">
-          <li>写下昵称，创建房间或填房间号加入。</li>
-          <li>等人到齐，房主点击开始。</li>
-          <li>买地、收租，最后没破产的人赢。</li>
-        </ol>
-        <label>昵称<input id="nick" name="nick" maxlength="8" required placeholder="例如：小陈" autocomplete="nickname" /></label>
-        <label>房间号<input id="code" name="code" maxlength="5" placeholder="加入时填写" autocapitalize="characters" spellcheck="false" /></label>
-        <label><span class="lbl">房间密码<span class="opt">可选</span></span><input id="pw" name="pw" maxlength="16" placeholder="不设就留空" autocomplete="off" /></label>
-        <div class="actions-row">
-          <button type="button" class="primary" id="btn-create">创建房间</button>
-          <button type="button" id="btn-join">加入房间</button>
-        </div>
-        <p id="home-error" class="form-error"></p>
-        <p id="resume-wrap" hidden><button type="button" id="btn-resume">回到上次的房间</button></p>
-      </form>
+      <header class="home-top">
+        <span class="mark" aria-hidden="true">富</span>
+        <span class="wordmark">大富翁</span>
+      </header>
+      <div class="home-main">
+        <section class="hero">
+          <p class="eyebrow">中国城市 · 联机对战</p>
+          <h1>大富翁</h1>
+          <p class="lede">两到六人，发个邀请链接就能进房。不注册，骰子在服务器上掷。</p>
+          <ol class="steps">
+            <li><span aria-hidden="true">一</span>写下昵称，设好密码创建房间，或者用房间号和密码加入</li>
+            <li><span aria-hidden="true">二</span>人到齐后，房主点开始</li>
+            <li><span aria-hidden="true">三</span>买地、盖房、收租，最后没破产的人赢</li>
+          </ol>
+          <div class="groups">
+            <p>40 格 · 8 个城市组 · 4 条铁路 · 上交所与深交所</p>
+            <div class="group-chips">
+              <span><i style="background:#a56a45"></i>老城</span>
+              <span><i style="background:#3aa0c8"></i>滨海</span>
+              <span><i style="background:#e25b8a"></i>江南</span>
+              <span><i style="background:#e08a2f"></i>西南</span>
+              <span><i style="background:#d4534a"></i>西北</span>
+              <span><i style="background:#e0b106"></i>岭南</span>
+              <span><i style="background:#2f9e6b"></i>上海</span>
+              <span><i style="background:#3b6cff"></i>北京</span>
+            </div>
+          </div>
+        </section>
+
+        <form class="ticket" id="join-form" aria-labelledby="join-title" novalidate>
+          <svg class="ticket-icon" aria-hidden="true" viewBox="0 0 48 48">
+            <rect x="2" y="2" width="44" height="44" rx="5" fill="#FFFDF7"></rect>
+            <rect x="2" y="2" width="11" height="11" fill="#DED5C8"></rect>
+            <rect x="35" y="2" width="11" height="11" fill="#F4D3CC"></rect>
+            <rect x="2" y="35" width="11" height="11" fill="#F4D3CC"></rect>
+            <rect x="35" y="35" width="11" height="11" fill="#F3DFA8"></rect>
+            <rect x="13" y="13" width="22" height="22" fill="#1E4036"></rect>
+            <rect x="13" y="35" width="11" height="3" fill="#3aa0c8"></rect>
+            <rect x="24" y="35" width="11" height="3" fill="#a56a45"></rect>
+            <rect x="10" y="24" width="3" height="11" fill="#e25b8a"></rect>
+            <rect x="10" y="13" width="3" height="11" fill="#e08a2f"></rect>
+            <rect x="13" y="10" width="11" height="3" fill="#d4534a"></rect>
+            <rect x="24" y="10" width="11" height="3" fill="#e0b106"></rect>
+            <rect x="35" y="13" width="3" height="11" fill="#2f9e6b"></rect>
+            <rect x="35" y="24" width="3" height="11" fill="#3b6cff"></rect>
+            <path d="M13 2v11H2M35 2v11h11M2 35h11v11M46 35H35v11" fill="none" stroke="#221C16" stroke-width="1.2"></path>
+            <rect x="2" y="2" width="44" height="44" rx="5" fill="none" stroke="#221C16" stroke-width="2"></rect>
+            <g transform="rotate(-10 24 24)">
+              <rect x="18.5" y="18.5" width="11" height="11" rx="2" fill="#F7F1E3"></rect>
+              <circle cx="21.3" cy="21.3" r="1.1" fill="#C8392B"></circle>
+              <circle cx="26.7" cy="21.3" r="1.1" fill="#C8392B"></circle>
+              <circle cx="21.3" cy="26.7" r="1.1" fill="#C8392B"></circle>
+              <circle cx="26.7" cy="26.7" r="1.1" fill="#C8392B"></circle>
+            </g>
+          </svg>
+          <div>
+            <h2 id="join-title">入座</h2>
+            <p class="hint">昵称 1 到 8 位，中文、字母或数字</p>
+          </div>
+          <label>昵称<input id="nick" name="nick" maxlength="8" required placeholder="例如：小陈" autocomplete="nickname" /></label>
+          <fieldset class="box box-create">
+            <legend>开新房间</legend>
+            <label><span>设置房间密码 <span class="req">必填</span></span><input id="new-pw" name="new-pw" maxlength="16" placeholder="告诉朋友，进房要用" autocomplete="off" /></label>
+            <button type="button" class="primary big" id="btn-create">创建房间</button>
+          </fieldset>
+          <fieldset class="box">
+            <legend>加入朋友的房间</legend>
+            <div class="pair">
+              <label>房间号<input id="code" name="code" maxlength="5" placeholder="5 位" autocapitalize="characters" spellcheck="false" autocomplete="off" /></label>
+              <label>房间密码<input id="pw" name="pw" maxlength="16" placeholder="问房主要" autocomplete="off" /></label>
+            </div>
+            <button type="button" class="outline big" id="btn-join">加入房间</button>
+          </fieldset>
+          <p id="home-error" class="form-error" role="alert"></p>
+          <button type="button" id="btn-resume" class="resume" hidden>
+            <span>回到上次的房间 <b id="resume-code"></b></span>
+            <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg>
+          </button>
+        </form>
+      </div>
     </main>
 
     <section id="room" hidden>
       <header class="topbar">
-        <div class="brand">大富翁</div>
-        <div class="room-chip"><span id="room-label"></span><button type="button" id="btn-copy">复制</button></div>
+        <span class="mark" aria-hidden="true">富</span>
+        <span class="wordmark">大富翁</span>
+        <button type="button" class="room-chip" id="btn-copy" aria-label="复制邀请链接">
+          <span class="room-label-k">房间</span>
+          <b id="room-label"></b>
+          <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"></path><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"></path></svg>
+        </button>
+        <span class="grow"></span>
         <div id="turn-chip" class="turn-chip"></div>
-        <button type="button" id="btn-rules">规则</button>
-        <button type="button" id="btn-leave">离开</button>
+        <button type="button" class="ghost" id="btn-rules">规则</button>
+        <button type="button" class="ghost" id="btn-leave">离开</button>
       </header>
       <div class="layout">
         <div id="stage">
@@ -53,44 +120,46 @@
               <div id="board" class="board"></div>
               <div id="token-layer" class="token-layer"></div>
             </div>
-            <div id="inspect" class="inspect"></div>
           </div>
         </div>
-        <aside class="side">
-          <div class="tabs" role="tablist">
-            <button type="button" data-tab="act" class="on">操作</button>
-            <button type="button" data-tab="people">玩家</button>
-            <button type="button" data-tab="log">记录</button>
-            <button type="button" data-tab="chat">聊天</button>
+        <aside class="side" data-tab="act" data-feed="log">
+          <div class="tabs" role="tablist" aria-label="面板">
+            <button type="button" role="tab" data-tab="act" aria-selected="true">操作</button>
+            <button type="button" role="tab" data-tab="people" aria-selected="false">玩家</button>
+            <button type="button" role="tab" data-tab="log" aria-selected="false">记录</button>
+            <button type="button" role="tab" data-tab="chat" aria-selected="false">聊天<span class="unread" id="unread-m" hidden></span></button>
           </div>
-          <section class="pane on" data-pane="act">
-            <h2>操作</h2>
+          <section class="pane card act-card" data-pane="act">
             <div id="phase"></div>
-            <div id="actions" class="action-grid"></div>
+            <div id="deed-side" class="deed-side"></div>
+            <div id="actions" class="actions"></div>
           </section>
-          <section class="pane" data-pane="people">
-            <h2>玩家</h2>
+          <section class="pane card" data-pane="people">
+            <div class="card-head"><h2>玩家</h2><span id="people-meta"></span></div>
             <div id="people"></div>
           </section>
-          <section class="pane" data-pane="log">
-            <h2>记录</h2>
-            <ol id="log"></ol>
-          </section>
-          <section class="pane" data-pane="chat">
-            <h2>聊天</h2>
-            <ol id="chat"></ol>
-            <form id="chat-form">
-              <input id="chat-input" maxlength="80" placeholder="说一句" autocomplete="off" />
-              <button type="submit">发送</button>
-            </form>
+          <section class="pane card feed" data-pane="feed">
+            <div class="seg" role="tablist" aria-label="记录与聊天">
+              <button type="button" role="tab" data-feed="log" aria-selected="true">记录</button>
+              <button type="button" role="tab" data-feed="chat" aria-selected="false">聊天<span class="unread" id="unread-d" hidden></span></button>
+            </div>
+            <ol id="log" class="list" data-feed-pane="log"></ol>
+            <div class="chat-wrap" data-feed-pane="chat">
+              <ol id="chat" class="list"></ol>
+              <form id="chat-form">
+                <input id="chat-input" maxlength="80" placeholder="说一句" autocomplete="off" aria-label="聊天内容" />
+                <button type="submit">发送</button>
+              </form>
+            </div>
           </section>
         </aside>
       </div>
+
       <div id="sheet" class="overlay" hidden>
         <div class="modal" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
           <header>
             <h3 id="sheet-title"></h3>
-            <button type="button" id="sheet-close">关闭</button>
+            <button type="button" class="ghost dark" id="sheet-close">关闭</button>
           </header>
           <div id="sheet-body"></div>
         </div>
@@ -99,39 +168,42 @@
         <div class="modal" role="dialog" aria-modal="true" aria-labelledby="rules-title">
           <header>
             <h3 id="rules-title">怎么玩</h3>
-            <button type="button" data-close>关闭</button>
+            <button type="button" class="ghost dark" data-close>关闭</button>
           </header>
           <div class="prose">
             <p>经过或停在起点，领取薪水。只用一颗骰子，由服务器掷出。掷出 6 就要再掷一次，再出 6 继续，没有上限。路过别人的地产不用付钱，只有停下才交租。格子上，无主地标售价，已买的地标当前过路费，抵押中标「抵押」。</p>
             <p>第一次停在无主地产可以购买。不买的话，若房主打开了拍卖，大家限时出价。租金只看这块地现在有几栋房，不因为同色凑齐而翻倍。</p>
-            <p>再停到自己的地上，这一下可以升一级，最多四栋房，没有旅馆。租金用四栋那一档封顶。普通地从棋盘内侧按房屋填颜色，空地 1/5，四栋填满。铁路买下后整格涂满。抵押中的地不能建，格子仍保留斜纹和「抵押」。有房子的地平时也能抵押，房子留下，抵押款只按地价的一半，抵押期间不收租。赎回再加一成。</p>
+            <p>再停到自己的地上，这一下可以升一级，最多四栋房，没有旅馆。租金用四栋那一档封顶。买下后格子从内侧填上主人的颜色，房子越多填得越满。抵押中的地不能建。有房子的地平时也能抵押，房子留下，抵押款只按地价的一半，抵押期间不收租。赎回再加一成。</p>
+            <p>玩家之间不能私下交易。轮到你、还没掷骰时，可以把自己一块没抵押的地拿出来拍卖，起拍价是地价加房屋造价的一半。别人限时出价，钱归你，房子跟着地走。没人出价就还在你手里。</p>
             <p>左下角是上交所，左上角是监狱，右上角是深交所。停在监狱要马上选择：交保释金，下一回合照常走、照常收租；或者跳过下一回合，这段时间别人停在你的地上不用交租。</p>
-            <p>交易是用现金和自己的地换对方的地，房子跟着地走。对方可以同意、拒绝，或只改现金再退回来。发起方收到改价后只能同意或拒绝。</p>
-            <p>上交所和深交所按你当前的现金抽行情。赚的进自己口袋，亏的进银行。</p>
-            <p>钱不够付租金时，必须选一块自己的地卖给银行，不能跳过。到手只有买入价，房子不另算钱，跟着地消失，地块变回无主。已经抵押的地也在列表里，到手是地价减去未还的抵押款。卖完还不够就再选，直到够还，或者没有地了就破产。最后没破产的人获胜。</p>
+            <p>上交所和深交所按你当前的现金抽行情：涨停现金 +10%，疯牛 +20%，跌停 −10%，熊市 −20%。赚的进自己口袋，亏的进银行。</p>
+            <p>钱不够付租金时，必须选一块自己的地卖给银行，不能跳过。地价加上房屋造价，一起按八折算；抵押中的地再扣掉没还的抵押款。卖完还不够就再选，直到够还，或者没有地了就破产。最后没破产的人获胜。</p>
             <p>掉线大约 20 秒后，这一回合会自动托管：只掷骰、不买地、不建房，进了监狱就跳过。用同一浏览器和昵称可以回到自己的座位。</p>
           </div>
         </div>
       </div>
-      <div id="liquidate" class="overlay" hidden>
-        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="liquidate-title">
+      <div id="liquidate" class="overlay mid" hidden>
+        <div class="modal paper" role="dialog" aria-modal="true" aria-labelledby="liquidate-title">
           <header>
             <h3 id="liquidate-title">卖给银行</h3>
+            <span class="muted-ink">不能跳过</span>
           </header>
           <div id="liquidate-body"></div>
         </div>
       </div>
-      <div id="jail" class="overlay" hidden>
+      <div id="jail" class="overlay mid" hidden>
         <div class="modal" role="dialog" aria-modal="true" aria-labelledby="jail-title">
-          <header>
+          <header class="jail-head">
+            <span class="jail-icon" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#3E352C" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M8 4v16M12 4v16M16 4v16"></path></svg></span>
             <h3 id="jail-title">监狱</h3>
           </header>
           <div id="jail-body"></div>
         </div>
       </div>
       <div id="market" class="market" hidden></div>
-      <div id="disconnected" class="disconnect" hidden>
-        <span>连接断了。</span>
+      <div id="disconnected" class="disconnect" role="alert" hidden>
+        <span class="dot" aria-hidden="true"></span>
+        <span class="grow">连接断了。约 20 秒后这一回合会自动托管</span>
         <button type="button" id="btn-reconnect">重新连接</button>
       </div>
     </section>

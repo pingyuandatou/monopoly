@@ -10,7 +10,9 @@ import {
   makeRng,
   marketDelta,
   marketQuote,
+  auctionStartPrice,
   pickLiquidation,
+  saleProceeds,
   startGame,
   updateRules,
 } from '../src/game/engine';
@@ -38,7 +40,6 @@ function setTurn(state: RoomState, player: Player) {
   state.rollAgain = false;
   state.debt = null;
   state.pendingBuy = null;
-  state.trade = null;
   state.auction = null;
   state.landedOn = null;
   state.bail = null;
@@ -295,7 +296,7 @@ describe('交易所', () => {
   });
 });
 
-describe('建房、抵押和交易', () => {
+describe('建房和抵押', () => {
   test('只有刚停在自己地上才能升一级', () => {
     const { state, A } = boot();
     give(state, A, [1, 2]);
@@ -338,26 +339,15 @@ describe('建房、抵押和交易', () => {
     expect(A.cash).toBe(beforeA + rentOf(1).twoHouses);
   });
 
-  test('对方只能改现金，发起方不能再还价', () => {
+  test('不能再和别的玩家私下交易', () => {
     const { state, A, B } = boot();
     give(state, A, [1]);
     give(state, B, [2]);
-    state.ownership[1]!.houses = 2;
     setTurn(state, A);
-    expect(act(state, A.id, { type: 'trade', toId: B.id, offerCash: 0, offerSquares: [1], requestSquares: [2] })).toEqual({ ok: true });
-    expect(act(state, B.id, { type: 'tradeCounter', cash: 40 })).toEqual({ ok: true });
-    expect(state.trade?.stage).toBe('counter');
-    expect(state.trade?.offerSquares).toEqual([1]);
-    expect(state.trade?.requestSquares).toEqual([2]);
-    expect(act(state, A.id, { type: 'tradeCounter', cash: 10 }).error).toMatch(/不能改价/);
-    const cashA = A.cash;
-    const cashB = B.cash;
-    expect(act(state, A.id, { type: 'tradeAnswer', accept: true })).toEqual({ ok: true });
-    expect(state.ownership[1]?.ownerId).toBe(B.id);
-    expect(state.ownership[1]?.houses).toBe(2);
-    expect(state.ownership[2]?.ownerId).toBe(A.id);
-    expect(A.cash).toBe(cashA - 40);
-    expect(B.cash).toBe(cashB + 40);
+    const legacy = { type: 'trade', toId: B.id, offerCash: 0, offerSquares: [1], requestSquares: [2] } as unknown as GameAction;
+    expect(act(state, A.id, legacy).ok).toBe(false);
+    expect(state.ownership[1]?.ownerId).toBe(A.id);
+    expect(state.ownership[2]?.ownerId).toBe(B.id);
   });
 
   test('四栋是最高，租金用四栋那一档', () => {
@@ -374,7 +364,7 @@ describe('建房、抵押和交易', () => {
 });
 
 describe('还债卖地', () => {
-  test('现金不够付租时整块卖给银行，房子不另算钱', () => {
+  test('现金不够付租时整块卖给银行，地和房按八折算', () => {
     const { state, A, B } = boot();
     give(state, A, [2]);
     give(state, B, [4]);
@@ -391,7 +381,7 @@ describe('还债卖地', () => {
     expect(act(state, B.id, { type: 'liquidate', square: 4 })).toEqual({ ok: true });
     expect(state.ownership[4]?.ownerId).toBeNull();
     expect(state.ownership[4]?.houses).toBe(0);
-    expect(B.cash).toBe(77);
+    expect(B.cash).toBe(1 + Math.round((80 + 2 * 50) * 0.8) - 4);
     expect(A.cash).toBe(1504);
     expect(state.phase).not.toBe('await_debt');
   });
@@ -407,7 +397,7 @@ describe('还债卖地', () => {
     expect(act(state, B.id, { type: 'roll' }, [2])).toEqual({ ok: true });
     expect(state.debt?.amount).toBe(rentOf(39).fourHouses);
     expect(act(state, B.id, { type: 'liquidate', square: 1 })).toEqual({ ok: true });
-    expect(B.cash).toBe(60);
+    expect(B.cash).toBe(48);
     expect(B.bankrupt).toBe(false);
     expect(state.phase).toBe('await_debt');
     expect(state.ownership[4]?.ownerId).toBe(B.id);
@@ -415,10 +405,10 @@ describe('还债卖地', () => {
     expect(B.bankrupt).toBe(true);
     expect(state.ownership[1]?.ownerId).toBeNull();
     expect(state.ownership[4]?.ownerId).toBeNull();
-    expect(A.cash).toBe(1500 + 140);
+    expect(A.cash).toBe(1500 + 48 + 64);
   });
 
-  test('抵押的地到手是地价减去未还抵押款', () => {
+  test('抵押的地按八折算后再扣掉未还抵押款', () => {
     const { state, A, B } = boot();
     give(state, A, [2]);
     give(state, B, [1]);
@@ -432,7 +422,7 @@ describe('还债卖地', () => {
     expect(state.ownership[1]?.ownerId).toBeNull();
     expect(state.ownership[1]?.houses).toBe(0);
     expect(state.ownership[1]?.mortgaged).toBe(false);
-    expect(B.cash).toBe(26);
+    expect(B.cash).toBe(Math.round((60 + 3 * 50) * 0.8) - 30 - 4);
     expect(A.cash).toBe(1504);
   });
 
@@ -468,5 +458,69 @@ describe('还债卖地', () => {
     expect(state.ownership[1]?.ownerId).toBeNull();
     expect(state.ownership[4]?.ownerId).toBe(B.id);
     expect(state.phase).not.toBe('await_debt');
+  });
+});
+
+describe('拍卖自己的地', () => {
+  test('起拍价是地价加房屋造价的一半，成交后钱归卖家，房子跟着走', () => {
+    const { state, A, B } = boot();
+    give(state, A, [1]);
+    state.ownership[1]!.houses = 2;
+    setTurn(state, A);
+    expect(auctionStartPrice(1, 2)).toBe(Math.round((60 + 2 * 50) * 0.5));
+    expect(act(state, A.id, { type: 'auctionOwn', square: 1 })).toEqual({ ok: true });
+    expect(state.phase).toBe('await_auction');
+    expect(state.auction?.sellerId).toBe(A.id);
+    expect(state.auction?.minBid).toBe(80);
+    expect(act(state, A.id, { type: 'bid', amount: 100 }).error).toMatch(/自己/);
+    expect(act(state, A.id, { type: 'roll' }, [3]).ok).toBe(false);
+    expect(act(state, B.id, { type: 'bid', amount: 79 }).error).toMatch(/起拍价/);
+    const cashA = A.cash;
+    const cashB = B.cash;
+    expect(act(state, B.id, { type: 'bid', amount: 80 })).toEqual({ ok: true });
+    expect(state.auction).toBeNull();
+    expect(state.ownership[1]?.ownerId).toBe(B.id);
+    expect(state.ownership[1]?.houses).toBe(2);
+    expect(A.cash).toBe(cashA + 80);
+    expect(B.cash).toBe(cashB - 80);
+    expect(state.phase).toBe('await_roll');
+    expect(state.currentPlayerId).toBe(A.id);
+  });
+
+  test('没人出价就流拍，地还在自己手里，接着掷骰', () => {
+    const { state, A, players } = boot(['甲', '乙', '丙']);
+    const [, B, C] = players;
+    give(state, A, [6]);
+    setTurn(state, A);
+    expect(act(state, A.id, { type: 'auctionOwn', square: 6 })).toEqual({ ok: true });
+    expect(act(state, A.id, { type: 'pass' }).ok).toBe(false);
+    expect(act(state, B!.id, { type: 'pass' })).toEqual({ ok: true });
+    expect(state.phase).toBe('await_auction');
+    expect(act(state, C!.id, { type: 'pass' })).toEqual({ ok: true });
+    expect(state.auction).toBeNull();
+    expect(state.ownership[6]?.ownerId).toBe(A.id);
+    expect(state.phase).toBe('await_roll');
+    expect(act(state, A.id, { type: 'roll' }, [3])).toEqual({ ok: true });
+  });
+
+  test('只能在自己掷骰前拍卖，抵押中的地不能拍', () => {
+    const { state, A, B } = boot();
+    give(state, A, [1, 3]);
+    state.ownership[3]!.mortgaged = true;
+    setTurn(state, A);
+    expect(act(state, B.id, { type: 'auctionOwn', square: 1 }).error).toMatch(/还没轮到你/);
+    expect(act(state, A.id, { type: 'auctionOwn', square: 3 }).error).toMatch(/赎回/);
+    expect(act(state, A.id, { type: 'auctionOwn', square: 2 }).error).toMatch(/不是你的/);
+    state.phase = 'await_manage';
+    expect(act(state, A.id, { type: 'auctionOwn', square: 1 }).error).toMatch(/掷骰/);
+  });
+});
+
+describe('卖给银行的价钱', () => {
+  test('地价加房屋造价打八折，抵押中再扣抵押款', () => {
+    expect(saleProceeds(1, false, 0)).toBe(48);
+    expect(saleProceeds(2, false, 1)).toBe(88);
+    expect(saleProceeds(9, true, 0)).toBe(104 - 65);
+    expect(saleProceeds(5, false, 0)).toBe(160);
   });
 });

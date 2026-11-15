@@ -203,6 +203,10 @@ export class Room extends DurableObject<Env> {
     }
 
     if (!state) {
+      if (!password) {
+        this.fail(ws, '创建房间要设一个密码');
+        return;
+      }
       const created = createRoomState(roomCode, password);
       const player = makePlayer(newId('p'), nickname, newId(''), SETTINGS.playerColors[0]?.hex ?? '#e24b4b', SETTINGS.avatars[0]?.id ?? 'pebble', true);
       created.players.push(player);
@@ -392,8 +396,14 @@ export class Room extends DurableObject<Env> {
     const json = rows[0]?.json;
     if (!json) return null;
     try {
-      const parsed = JSON.parse(json) as RoomState;
+      const parsed = JSON.parse(json) as RoomState & { trade?: unknown };
       if (parsed.v !== 5) return null;
+      // 旧版本留下的交易字段：交易已经取消，读进来时丢掉。
+      delete parsed.trade;
+      if (parsed.auction) {
+        parsed.auction.sellerId = parsed.auction.sellerId ?? null;
+        parsed.auction.minBid = parsed.auction.minBid ?? 1;
+      }
       return parsed;
     } catch (err) {
       console.error('bad room json', err);
@@ -435,7 +445,6 @@ function parseAction(msg: Record<string, unknown>): GameAction | null {
     case 'skipJail':
     case 'bankrupt':
     case 'pass':
-    case 'tradeCancel':
       return { type: msg.type };
     case 'bid':
       if (typeof msg.amount !== 'number' || !Number.isInteger(msg.amount)) return null;
@@ -445,28 +454,9 @@ function parseAction(msg: Record<string, unknown>): GameAction | null {
     case 'liquidate':
     case 'mortgage':
     case 'unmortgage':
+    case 'auctionOwn':
       if (typeof msg.square !== 'number' || !Number.isInteger(msg.square)) return null;
       return { type: msg.type, square: msg.square };
-    case 'tradeAnswer':
-      return { type: 'tradeAnswer', accept: msg.accept === true };
-    case 'trade':
-    case 'tradeCounter': {
-      if (msg.type === 'tradeCounter') {
-        if (typeof msg.cash !== 'number' || !Number.isInteger(msg.cash)) return null;
-        return { type: 'tradeCounter', cash: msg.cash };
-      }
-      if (typeof msg.toId !== 'string') return null;
-      if (typeof msg.offerCash !== 'number') return null;
-      if (!Array.isArray(msg.offerSquares) || !Array.isArray(msg.requestSquares)) return null;
-      if (!msg.offerSquares.every((n) => typeof n === 'number') || !msg.requestSquares.every((n) => typeof n === 'number')) return null;
-      return {
-        type: 'trade',
-        toId: msg.toId,
-        offerCash: msg.offerCash,
-        offerSquares: msg.offerSquares as number[],
-        requestSquares: msg.requestSquares as number[],
-      };
-    }
     default:
       return null;
   }

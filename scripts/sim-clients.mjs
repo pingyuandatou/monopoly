@@ -80,7 +80,7 @@ function decide(state) {
     const shortfall = (state.debt?.amount ?? 0) - (me?.cash ?? 0);
     const lots = state.squares
       .filter((sq) => sq.ownerId === me?.id && sq.price != null)
-      .map((sq) => ({ index: sq.index, proceeds: sq.mortgaged ? sq.price - (sq.mortgage || 0) : sq.price }));
+      .map((sq) => ({ index: sq.index, proceeds: sq.bankSale ?? 0 }));
     if (!lots.length) return { type: 'bankrupt' };
     const enough = lots.filter((lot) => lot.proceeds >= shortfall).sort((a, b) => a.proceeds - b.proceeds || a.index - b.index);
     const richest = [...lots].sort((a, b) => b.proceeds - a.proceeds || a.index - b.index);
@@ -180,7 +180,7 @@ async function main() {
   const players = [a, b, c];
   let steps = 0;
   let auctionDone = false;
-  let tradeDone = false;
+  let ownAuctionDone = false;
   while (steps < 180) {
     const s = a.state;
     if (s.status === 'finished') break;
@@ -189,12 +189,16 @@ async function main() {
     await actor.until(() => actor.state?.seq === s.seq, '同步');
 
     if (s.phase === 'await_auction' && s.auction) {
-      const bidder = players.find((p) => p.welcome.playerId !== s.currentPlayerId);
+      const sellerId = s.auction.sellerId;
+      const amount = Math.max(30, s.auction.minBid || 1);
+      const bidder = players.find((p) => p.welcome.playerId !== s.currentPlayerId && (p.state.players.find((q) => q.id === p.welcome.playerId)?.cash ?? 0) >= amount);
+      if (!bidder) throw new Error('没有人出得起起拍价');
       const beforeBid = a.state.seq;
-      bidder.send({ type: 'bid', amount: 30 });
-      await a.until(() => a.state.seq > beforeBid || a.state.auction?.highBid === 30, '有人出价');
+      bidder.send({ type: 'bid', amount });
+      await a.until(() => a.state.seq > beforeBid || a.state.auction?.highBid === amount, '有人出价');
       for (const client of players) {
         if (client.welcome.playerId === bidder.welcome.playerId) continue;
+        if (client.welcome.playerId === sellerId) continue;
         if (a.state.phase !== 'await_auction') break;
         const beforePass = a.state.seq;
         client.send({ type: 'pass' });
@@ -210,32 +214,16 @@ async function main() {
       continue;
     }
 
-    if (!tradeDone && auctionDone && s.phase === 'await_manage' && !s.rollAgain) {
-      const mine = s.squares.find((sq) => sq.ownerId === s.currentPlayerId && (sq.type === 'property' || sq.type === 'railroad'));
-      const other = players.find((p) => p.welcome.playerId !== s.currentPlayerId && s.squares.some((sq) => sq.ownerId === p.welcome.playerId && (sq.type === 'property' || sq.type === 'railroad')));
-      const theirs = other ? s.squares.find((sq) => sq.ownerId === other.welcome.playerId && (sq.type === 'property' || sq.type === 'railroad')) : null;
-      if (mine && other && theirs) {
-        const beforeTrade = a.state.seq;
-        actor.send({
-          type: 'trade',
-          toId: other.welcome.playerId,
-          offerCash: 0,
-          offerSquares: [mine.index],
-          requestSquares: [theirs.index],
-        });
-        await other.until(() => other.state.trade?.toId === other.welcome.playerId && other.state.trade?.stage === 'offer', '收到交易');
-        other.send({ type: 'tradeCounter', cash: 40 });
-        await actor.until(() => actor.state.trade?.stage === 'counter' && actor.state.trade?.fromId === actor.welcome.playerId, '收到改价');
-        if (actor.state.trade.offerSquares[0] !== mine.index || actor.state.trade.requestSquares[0] !== theirs.index) {
-          throw new Error('改价把地块改掉了');
-        }
-        actor.send({ type: 'tradeAnswer', accept: true });
-        await a.until(() => a.state.seq > beforeTrade && !a.state.trade, '交易完成');
-        const moved = a.state.squares.find((sq) => sq.index === mine.index)?.ownerId;
-        const gained = a.state.squares.find((sq) => sq.index === theirs.index)?.ownerId;
-        if (moved !== other.welcome.playerId || gained !== actor.welcome.playerId) throw new Error('成交后地产没有按约定交换');
-        tradeDone = true;
-        say(`交易完成，「${mine.name}」和「${theirs.name}」互换，现金改成 40`);
+    if (!ownAuctionDone && auctionDone && s.phase === 'await_roll') {
+      const mine = s.squares.find((sq) => sq.ownerId === s.currentPlayerId && !sq.mortgaged && sq.auctionStart != null);
+      const rich = players.some((p) => p.welcome.playerId !== s.currentPlayerId && (s.players.find((q) => q.id === p.welcome.playerId)?.cash ?? 0) >= (mine?.auctionStart ?? Infinity));
+      if (mine && rich) {
+        const beforeOwn = a.state.seq;
+        actor.send({ type: 'auctionOwn', square: mine.index });
+        await a.until(() => a.state.seq > beforeOwn && a.state.auction?.sellerId === s.currentPlayerId, '开始拍卖自己的地');
+        if (a.state.auction.minBid !== mine.auctionStart) throw new Error('起拍价和格子上标的不一样');
+        say(`${actor.name} 拍卖自己的「${mine.name}」，起拍价 ¥${mine.auctionStart}`);
+        ownAuctionDone = true;
         steps += 1;
         continue;
       }
@@ -243,7 +231,7 @@ async function main() {
 
     const bought = s.log.some((item) => item.text.includes('买下') || item.text.includes('放弃购买') || item.text.includes('拍下'));
     const atB = s.currentPlayerId === b.welcome.playerId && s.phase === 'await_roll' && !s.rollAgain && s.turnIndex >= startTurn + 3;
-    if (atB && bought && auctionDone && tradeDone) break;
+    if (atB && bought && auctionDone && ownAuctionDone) break;
     if (s.phase === 'await_buy' && !auctionDone) {
       const beforeDecline = actor.state.seq;
       actor.send({ type: 'decline' });
@@ -255,7 +243,7 @@ async function main() {
     steps += 1;
   }
   if (!auctionDone) throw new Error('这局里没有完成拍卖');
-  if (!tradeDone) throw new Error('这局里没有完成交易');
+  if (!ownAuctionDone) throw new Error('这局里没有拍卖过自己的地');
   await a.until(() => a.state.currentPlayerId === b.welcome.playerId && a.state.phase === 'await_roll', '停在小林回合');
   const view = a.state;
   const bought = view.log.some((item) => item.text.includes('买下') || item.text.includes('放弃购买'));

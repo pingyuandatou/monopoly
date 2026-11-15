@@ -58,7 +58,7 @@ export interface RoomRules {
 
 export type Phase = 'lobby' | 'await_roll' | 'await_buy' | 'await_auction' | 'await_jail' | 'await_debt' | 'await_manage' | 'finished';
 export type RoomStatus = 'lobby' | 'playing' | 'finished';
-export type LogKind = 'info' | 'buy' | 'rent' | 'build' | 'jail' | 'auction' | 'trade' | 'market';
+export type LogKind = 'info' | 'buy' | 'rent' | 'build' | 'jail' | 'auction' | 'market';
 export type MarketCode = 'limit_up' | 'bull' | 'limit_down' | 'bear';
 
 export interface MarketEvent {
@@ -108,18 +108,6 @@ export interface Debt {
   resume: Resume;
 }
 
-export interface Trade {
-  id: string;
-  fromId: string;
-  toId: string;
-  /** 发起方付给对方的现金。对方只能改这个数。 */
-  offerCash: number;
-  offerSquares: number[];
-  requestSquares: number[];
-  /** offer：等对方表态。counter：对方已改价，等发起方同意或拒绝。 */
-  stage: 'offer' | 'counter';
-}
-
 /** 停进监狱时锁定的保释金。 */
 export interface JailQuote {
   amount: number;
@@ -133,6 +121,10 @@ export interface JailQuote {
 
 export interface Auction {
   square: number;
+  /** null 是银行拍卖（有人不买）；否则是这位玩家在掷骰前拍卖自己的地。 */
+  sellerId: string | null;
+  /** 第一口出价的下限。银行拍卖是 1，玩家拍卖是地价加房屋造价的一半。 */
+  minBid: number;
   highBid: number;
   highBidderId: string | null;
   startedAt: number;
@@ -170,7 +162,6 @@ export interface RoomState {
   lastDice: number | null;
   pendingBuy: number | null;
   debt: Debt | null;
-  trade: Trade | null;
   auction: Auction | null;
   /** 最近一次交易所行情，给所有人弹窗。 */
   market: MarketEvent | null;
@@ -210,16 +201,7 @@ export type GameAction =
   | { type: 'payJail' }
   | { type: 'skipJail' }
   | { type: 'bankrupt' }
-  | {
-      type: 'trade';
-      toId: string;
-      offerCash: number;
-      offerSquares: number[];
-      requestSquares: number[];
-    }
-  | { type: 'tradeCounter'; cash: number }
-  | { type: 'tradeAnswer'; accept: boolean }
-  | { type: 'tradeCancel' };
+  | { type: 'auctionOwn'; square: number };
 
 export interface PublicSquare {
   index: number;
@@ -238,6 +220,10 @@ export interface PublicSquare {
   mortgaged: boolean;
   hint: string;
   rentTable: number[] | null;
+  /** 现在卖给银行能拿到多少：(地价 + 房屋造价) × 0.8，抵押中再扣抵押款。 */
+  bankSale: number | null;
+  /** 现在拍卖这块地的起拍价：(地价 + 房屋造价) × 0.5。 */
+  auctionStart: number | null;
 }
 
 export interface PublicPlayer {
@@ -265,7 +251,6 @@ export interface PublicState {
   lastDice: number | null;
   pendingBuy: number | null;
   debt: { amount: number; reason: string } | null;
-  trade: Trade | null;
   auction: Auction | null;
   market: MarketEvent | null;
   bail: JailQuote | null;

@@ -16,7 +16,6 @@ import type {
   RoomRules,
   RoomState,
   Square,
-  Trade,
 } from './types';
 
 export interface Rng {
@@ -134,7 +133,6 @@ export function createRoomState(roomCode: string, password: string): RoomState {
     lastDice: null,
     pendingBuy: null,
     debt: null,
-    trade: null,
     auction: null,
     market: null,
     bail: null,
@@ -166,6 +164,7 @@ export function updateRules(state: RoomState, byId: string, patch: Partial<RoomR
   }
   if (next.maxPlayers < state.players.length) return '人数上限不能小于已经入座的人数';
   if (typeof next.auction !== 'boolean') return '开关设置无效';
+  if (password != null && !password.trim()) return '房间密码不能为空';
   const passwordNext = password != null ? password.slice(0, 16) : state.password;
   if (JSON.stringify(state.rules) === JSON.stringify(next) && state.password === passwordNext) return null;
   state.rules = next;
@@ -257,7 +256,6 @@ export function startGame(state: RoomState, byId: string, _rng: Rng): string | n
   state.lastDice = null;
   state.pendingBuy = null;
   state.debt = null;
-  state.trade = null;
   state.auction = null;
   state.market = null;
   state.pot = 0;
@@ -289,15 +287,31 @@ export function resolveAuction(state: RoomState, now: number): boolean {
   const player = playerById(state, state.currentPlayerId);
   state.auction = null;
   const sq = squareAt(auction.square);
+  const own = state.ownership[auction.square];
   const winner = auction.highBidderId ? playerById(state, auction.highBidderId) : null;
-  if (winner && !winner.bankrupt && winner.cash >= auction.highBid && auction.highBid > 0) {
-    winner.cash -= auction.highBid;
-    const own = state.ownership[auction.square];
-    if (own) {
+  const minBid = auction.minBid ?? 1;
+  const sellerId = auction.sellerId ?? null;
+  const valid = Boolean(winner && !winner.bankrupt && winner.cash >= auction.highBid && auction.highBid >= minBid && auction.highBid > 0);
+  if (sellerId) {
+    const seller = playerById(state, sellerId);
+    if (valid && winner && seller && own && own.ownerId === seller.id && winner.id !== seller.id) {
+      winner.cash -= auction.highBid;
+      seller.cash += auction.highBid;
       own.ownerId = winner.id;
-      own.houses = 0;
-      own.mortgaged = false;
+      const houses = sq.type === 'property' && own.houses > 0 ? `，${own.houses} 栋房一起归他` : '';
+      pushLog(state, `${winner.nickname} 以 ${money(auction.highBid)} 拍下 ${seller.nickname} 的「${sq.name}」${houses}`, 'auction');
+    } else {
+      pushLog(state, `「${sq.name}」没人出价，还在 ${seller?.nickname ?? '原主人'} 手里`, 'auction');
     }
+    if (player && !player.bankrupt && state.status === 'playing') state.phase = 'await_roll';
+    state.seq += 1;
+    return true;
+  }
+  if (valid && winner && own) {
+    winner.cash -= auction.highBid;
+    own.ownerId = winner.id;
+    own.houses = 0;
+    own.mortgaged = false;
     pushLog(state, `${winner.nickname} 以 ${money(auction.highBid)} 拍下「${sq.name}」`, 'auction');
   } else {
     pushLog(state, `「${sq.name}」无人成交，留给银行`, 'auction');
@@ -314,10 +328,6 @@ export function autoStep(state: RoomState, rng: Rng): boolean {
   if (!id) return false;
   const player = playerById(state, id);
   if (!player || player.bankrupt) return false;
-  if (state.trade) {
-    if (state.trade.fromId === id) return apply(state, id, { type: 'tradeCancel' }, rng).ok;
-    state.trade = null;
-  }
   if (state.phase === 'await_jail') return apply(state, id, { type: 'skipJail' }, rng).ok;
   if (state.phase === 'await_roll') return apply(state, id, { type: 'roll' }, rng).ok;
   if (state.phase === 'await_buy') return apply(state, id, { type: 'decline' }, rng).ok;
@@ -366,7 +376,6 @@ export function project(state: RoomState, viewerId: string | null): PublicState 
     lastDice: state.lastDice,
     pendingBuy: state.pendingBuy,
     debt: state.debt ? { amount: state.debt.amount, reason: state.debt.reason } : null,
-    trade: state.trade,
     auction: state.auction,
     market: state.market,
     bail: state.bail,
@@ -412,10 +421,7 @@ function dispatch(state: RoomState, player: Player, action: GameAction, ctx: Ctx
   if (action.type === 'bid') return bid(state, player, action.amount);
   if (action.type === 'pass') return passAuction(state, player);
   if (action.type === 'liquidate') return liquidate(state, player, action.square, ctx);
-  if (action.type === 'tradeAnswer') return answerTrade(state, player, action.accept);
-  if (action.type === 'tradeCounter') return counterTrade(state, player, action.cash);
   if (state.phase === 'await_auction') return '拍卖进行中';
-  if (state.trade && action.type !== 'tradeCancel') return '请先处理进行中的交易';
   if (state.currentPlayerId !== player.id) return '还没轮到你';
 
   switch (action.type) {
@@ -441,10 +447,8 @@ function dispatch(state: RoomState, player: Player, action: GameAction, ctx: Ctx
       return skipJail(state, player);
     case 'bankrupt':
       return declareBankruptcy(state, player, ctx);
-    case 'trade':
-      return proposeTrade(state, player, action);
-    case 'tradeCancel':
-      return cancelTrade(state, player);
+    case 'auctionOwn':
+      return startOwnerAuction(state, player, action.square);
     default:
       return '未知操作';
   }
@@ -513,6 +517,8 @@ function decline(state: RoomState, player: Player): string | null {
     const now = Date.now();
     const auction: Auction = {
       square: index,
+      sellerId: null,
+      minBid: 1,
       highBid: 0,
       highBidderId: null,
       startedAt: now,
@@ -531,7 +537,9 @@ function decline(state: RoomState, player: Player): string | null {
 function bid(state: RoomState, player: Player, amount: number): string | null {
   const auction = state.auction;
   if (state.phase !== 'await_auction' || !auction) return '现在没有拍卖';
-  if (!Number.isInteger(amount) || amount <= auction.highBid) return '出价要高于当前价格';
+  if (auction.sellerId === player.id) return '不能给自己拍卖的地出价';
+  const min = auction.highBidderId ? auction.highBid + 1 : Math.max(1, auction.minBid ?? 1);
+  if (!Number.isInteger(amount) || amount < min) return auction.highBidderId ? '出价要高于当前价格' : `起拍价是 ${money(min)}`;
   if (player.cash < amount) return '现金不够这个出价';
   auction.highBid = amount;
   auction.highBidderId = player.id;
@@ -550,6 +558,7 @@ function bid(state: RoomState, player: Player, amount: number): string | null {
 function passAuction(state: RoomState, player: Player): string | null {
   const auction = state.auction;
   if (state.phase !== 'await_auction' || !auction) return '现在没有拍卖';
+  if (auction.sellerId === player.id) return '这是你拍卖的地，等别人出价';
   if (auction.highBidderId === player.id) return '你是当前最高出价，不能放弃';
   if (!auction.passed.includes(player.id)) auction.passed.push(player.id);
   pushLog(state, `${player.nickname} 不参与这轮出价`, 'auction');
@@ -560,7 +569,7 @@ function passAuction(state: RoomState, player: Player): string | null {
 function closeAuctionIfReady(state: RoomState): void {
   const auction = state.auction;
   if (!auction) return;
-  const waiting = alive(state).filter((p) => p.id !== auction.highBidderId && !auction.passed.includes(p.id));
+  const waiting = alive(state).filter((p) => p.id !== auction.highBidderId && p.id !== auction.sellerId && !auction.passed.includes(p.id));
   if (waiting.length === 0) {
     auction.endsAt = 0;
     resolveAuction(state, Date.now());
@@ -636,94 +645,31 @@ function declareBankruptcy(state: RoomState, player: Player, ctx: Ctx): string |
   return null;
 }
 
-function proposeTrade(state: RoomState, player: Player, action: Extract<GameAction, { type: 'trade' }>): string | null {
-  if (player.inJail) return '停走期间不能发起交易';
-  if (state.phase !== 'await_roll' && state.phase !== 'await_manage') return '现在不能交易';
-  if (state.trade) return '已经有一笔交易在进行';
-  if (!action.toId) return '交易对象无效';
-  return putTrade(state, player, action.toId, action);
-}
-
-function counterTrade(state: RoomState, player: Player, cash: number): string | null {
-  const trade = state.trade;
-  if (!trade || trade.stage !== 'offer' || trade.toId !== player.id) return '现在不能改价';
-  if (!Number.isInteger(cash) || cash < 0) return '金额必须是非负整数';
-  const from = playerById(state, trade.fromId);
-  if (!from || from.bankrupt) return '对方已经不在对局中';
-  trade.offerCash = cash;
-  trade.stage = 'counter';
-  pushLog(state, `${player.nickname} 把现金改成 ${money(cash)}，等 ${from.nickname} 决定`, 'trade');
-  return null;
-}
-
-function putTrade(
-  state: RoomState,
-  player: Player,
-  toId: string,
-  action: { offerCash: number; offerSquares: number[]; requestSquares: number[] },
-): string | null {
-  const to = playerById(state, toId);
-  if (!to || to.bankrupt || to.id === player.id) return '交易对象无效';
-  if (!Number.isInteger(action.offerCash) || action.offerCash < 0) return '金额必须是非负整数';
-  if (player.cash < action.offerCash) return '你的现金不足';
-  const offerErr = checkTradeSquares(state, player.id, action.offerSquares);
-  if (offerErr) return offerErr;
-  const requestErr = checkTradeSquares(state, to.id, action.requestSquares);
-  if (requestErr) return requestErr;
-  if (action.requestSquares.length === 0) return '要换对方的至少一块地';
-  if (action.offerSquares.some((i) => action.requestSquares.includes(i))) return '同一块地不能两边都拿';
-  const trade: Trade = {
-    id: newTradeId(),
-    fromId: player.id,
-    toId: to.id,
-    offerCash: action.offerCash,
-    offerSquares: [...action.offerSquares],
-    requestSquares: [...action.requestSquares],
-    stage: 'offer',
+/** 轮到自己、还没掷骰时，把自己一块没抵押的地拿出来拍卖。起拍价是地价加房屋造价的一半，钱归自己。 */
+function startOwnerAuction(state: RoomState, player: Player, index: number): string | null {
+  if (state.phase !== 'await_roll') return '只有轮到你、还没掷骰时才能拍卖自己的地';
+  if (state.auction) return '已经有一场拍卖在进行';
+  if (!Number.isInteger(index) || index < 0 || index >= SQUARES.length) return '这块地不能拍卖';
+  const sq = squareAt(index);
+  const own = state.ownership[index];
+  if (!own || own.ownerId !== player.id || sq.price == null) return '这不是你的地产';
+  if (own.mortgaged) return '抵押中的地要先赎回才能拍卖';
+  if (alive(state).length < 2) return '没有人可以出价';
+  const now = Date.now();
+  const minBid = auctionStartPrice(index, own.houses);
+  state.auction = {
+    square: index,
+    sellerId: player.id,
+    minBid,
+    highBid: 0,
+    highBidderId: null,
+    startedAt: now,
+    endsAt: now + SETTINGS.auctionSeconds * 1000,
+    passed: [],
   };
-  state.trade = trade;
-  pushLog(state, `${player.nickname} 向 ${to.nickname} 提议：${describeTrade(trade)}`, 'trade');
-  return null;
-}
-
-function answerTrade(state: RoomState, player: Player, accept: boolean): string | null {
-  const trade = state.trade;
-  if (!trade || responderId(trade) !== player.id) return '没有需要你回应的交易';
-  const from = playerById(state, trade.fromId);
-  const to = playerById(state, trade.toId);
-  if (!accept || !from || !to || from.bankrupt || to.bankrupt) {
-    state.trade = null;
-    pushLog(state, `${player.nickname} 拒绝了交易`, 'trade');
-    return null;
-  }
-  if (from.cash < trade.offerCash) return '现金不足，不能同意这笔交易';
-  const changed =
-    trade.offerSquares.some((i) => state.ownership[i]?.ownerId !== from.id) ||
-    trade.requestSquares.some((i) => state.ownership[i]?.ownerId !== to.id);
-  if (changed) {
-    state.trade = null;
-    pushLog(state, '地块已经换了主人，交易取消', 'trade');
-    return null;
-  }
-  from.cash -= trade.offerCash;
-  to.cash += trade.offerCash;
-  for (const i of trade.offerSquares) {
-    const own = state.ownership[i];
-    if (own) own.ownerId = to.id;
-  }
-  for (const i of trade.requestSquares) {
-    const own = state.ownership[i];
-    if (own) own.ownerId = from.id;
-  }
-  state.trade = null;
-  pushLog(state, `${player.nickname} 接受了交易`, 'trade');
-  return null;
-}
-
-function cancelTrade(state: RoomState, player: Player): string | null {
-  if (!state.trade || state.trade.fromId !== player.id) return '没有可取消的交易';
-  state.trade = null;
-  pushLog(state, `${player.nickname} 取消了交易`, 'trade');
+  state.phase = 'await_auction';
+  const houses = sq.type === 'property' && own.houses > 0 ? `（连 ${own.houses} 栋房）` : '';
+  pushLog(state, `${player.nickname} 拍卖自己的「${sq.name}」${houses}，起拍价 ${money(minBid)}，${SETTINGS.auctionSeconds} 秒内出价`, 'auction');
   return null;
 }
 
@@ -866,10 +812,6 @@ function charge(
     resumeLater(state, player, resume, ctx);
     return;
   }
-  if (state.trade) {
-    state.trade = null;
-    pushLog(state, '现金不够，进行中的交易取消了', 'trade');
-  }
   state.phase = 'await_debt';
   state.debt = { amount, reason, splits, resume };
   pushLog(state, `${reason}，现金不够（还差 ${money(amount - player.cash)}）`, kind);
@@ -935,7 +877,6 @@ function bankruptTo(state: RoomState, player: Player, creditor: string): void {
     state.winnerId = living[0]?.id ?? null;
     state.pendingBuy = null;
     state.debt = null;
-    state.trade = null;
     state.auction = null;
     state.rollAgain = false;
     if (living[0]) pushLog(state, `${living[0].nickname} 赢得了这局`);
@@ -965,7 +906,6 @@ function advanceTurn(state: RoomState): void {
   state.auction = null;
   state.bail = null;
   state.landedOn = null;
-  if (state.trade) state.trade = null;
   const living = alive(state);
   if (living.length <= 1) {
     state.status = 'finished';
@@ -1024,12 +964,25 @@ function moneyPhase(state: RoomState): boolean {
   return state.phase === 'await_roll' || state.phase === 'await_manage' || state.phase === 'await_buy' || state.phase === 'await_debt' || state.phase === 'await_jail';
 }
 
-/** 卖给银行的到手金额。未抵押是买入价；已抵押是买入价减去未还抵押款。房子不另算。 */
-export function saleProceeds(index: number, mortgaged: boolean): number {
+/** 地价加上现有房屋的造价。 */
+function lotValue(index: number, houses: number): number {
   const sq = SQUARES[index];
   if (!sq || sq.price == null) return 0;
-  if (mortgaged) return Math.max(0, sq.price - (sq.mortgage ?? 0));
-  return sq.price;
+  const built = sq.type === 'property' ? Math.max(0, Math.min(4, houses)) * (sq.houseCost ?? 0) : 0;
+  return sq.price + built;
+}
+
+/** 卖给银行的到手金额：(地价 + 房屋造价) × 0.8，四舍五入；抵押中再扣掉未还的抵押款。 */
+export function saleProceeds(index: number, mortgaged: boolean, houses = 0): number {
+  const sq = SQUARES[index];
+  if (!sq || sq.price == null) return 0;
+  const gross = Math.round(lotValue(index, houses) * 0.8);
+  return Math.max(0, gross - (mortgaged ? (sq.mortgage ?? 0) : 0));
+}
+
+/** 玩家拍卖自己地产的起拍价：(地价 + 房屋造价) × 0.5，四舍五入，至少 1。 */
+export function auctionStartPrice(index: number, houses = 0): number {
+  return Math.max(1, Math.round(lotValue(index, houses) * 0.5));
 }
 
 /**
@@ -1044,7 +997,7 @@ export function pickLiquidation(state: RoomState, player: Player): number | null
     const sq = SQUARES[index];
     const own = state.ownership[index];
     if (!sq || !own || own.ownerId !== player.id || sq.price == null) continue;
-    lots.push({ index, proceeds: saleProceeds(index, own.mortgaged) });
+    lots.push({ index, proceeds: saleProceeds(index, own.mortgaged, own.houses) });
   }
   if (!lots.length) return null;
   const enough = lots.filter((lot) => lot.proceeds >= shortfall).sort((a, b) => a.proceeds - b.proceeds || a.index - b.index);
@@ -1060,14 +1013,14 @@ function liquidate(state: RoomState, player: Player, index: number, ctx: Ctx): s
   const own = state.ownership[index];
   if (!sq || !own || own.ownerId !== player.id || sq.price == null) return '这块地不能卖给银行';
   const mortgaged = own.mortgaged;
-  const hadHouses = own.houses > 0;
-  const proceeds = saleProceeds(index, mortgaged);
+  const houseCount = sq.type === 'property' ? own.houses : 0;
+  const proceeds = saleProceeds(index, mortgaged, houseCount);
   own.ownerId = null;
   own.houses = 0;
   own.mortgaged = false;
   player.cash += proceeds;
   const note = mortgaged ? '（已扣除未还抵押款）' : '';
-  const houses = hadHouses ? '，房子一并收回' : '';
+  const houses = houseCount > 0 ? `，连 ${houseCount} 栋房按八折算` : '，按八折算';
   pushLog(state, `${player.nickname} 把「${sq.name}」卖给银行，到手 ${money(proceeds)}${note}${houses}`);
   if (!state.debt) return null;
   if (player.cash >= state.debt.amount) {
@@ -1086,18 +1039,6 @@ function forceBankrupt(state: RoomState, player: Player): void {
   if (creditors.length === 1) bankruptTo(state, player, creditors[0]!);
   else if (creditors.length > 1) bankruptTo(state, player, mainCreditor(debt.splits));
   else bankruptTo(state, player, 'bank');
-}
-
-function checkTradeSquares(state: RoomState, ownerId: string, list: number[]): string | null {
-  if (!Array.isArray(list) || list.length > 12) return '地产列表无效';
-  const seen = new Set<number>();
-  for (const index of list) {
-    if (!Number.isInteger(index) || index < 0 || index >= BOARD_SIZE) return '地产编号无效';
-    if (seen.has(index)) return '地产重复了';
-    seen.add(index);
-    if (state.ownership[index]?.ownerId !== ownerId) return '不能交易不属于自己的地产';
-  }
-  return null;
 }
 
 function countOwned(state: RoomState, ownerId: string, type: Square['type']): number {
@@ -1153,16 +1094,6 @@ function mainCreditor(splits: { to: string; amount: number }[]): string {
   return best;
 }
 
-function describeTrade(trade: Trade): string {
-  const offerBits = [trade.offerCash > 0 ? money(trade.offerCash) : '', trade.offerSquares.map((i) => `「${SQUARES[i]?.name ?? i}」`).join('、')].filter(Boolean);
-  const requestBits = trade.requestSquares.map((i) => `「${SQUARES[i]?.name ?? i}」`).join('、');
-  return `给出${offerBits.join('、') || '不出现金和地'}，换取${requestBits || '空'}`;
-}
-
-function responderId(trade: Trade): string {
-  return trade.stage === 'counter' ? trade.fromId : trade.toId;
-}
-
 /** 未抵押、有主人的地，按现在的房屋或铁路条数算出过路费。主人是否在停走不影响这个数。 */
 export function jailBail(state: RoomState): JailQuote {
   let bestRent = 0;
@@ -1204,12 +1135,6 @@ function propertyRent(rent: PropertyRent, houses: number): number {
   return table[Math.max(0, Math.min(4, houses))] ?? rent.fourHouses;
 }
 
-function newTradeId(): string {
-  const buf = new Uint32Array(1);
-  crypto.getRandomValues(buf);
-  return `t${(buf[0] ?? 0).toString(36)}`;
-}
-
 function validDie(face: number): boolean {
   return Number.isInteger(face) && face >= 1 && face <= 6;
 }
@@ -1239,6 +1164,8 @@ function toPublicSquare(state: RoomState, sq: Square, index: number): PublicSqua
     mortgaged: own.mortgaged,
     hint: hintFor(state, sq),
     rentTable: rentTable(sq),
+    bankSale: sq.price != null && own.ownerId ? saleProceeds(index, own.mortgaged, own.houses) : null,
+    auctionStart: sq.price != null && own.ownerId ? auctionStartPrice(index, own.houses) : null,
   };
 }
 
