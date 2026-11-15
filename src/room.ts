@@ -1,6 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import { SETTINGS } from './game/content';
-import { apply, autoStep, createRoomState, makePlayer, makeRng, maybeTransferHost, project, resolveAuction, setAppearance, startGame, touchHost, updateRules } from './game/engine';
+import { apply, autoStep, autoplayDue, createRoomState, makePlayer, makeRng, maybeTransferHost, nextWakeAt, project, resolveAuction, setAppearance, startGame, touchHost, updateRules } from './game/engine';
 import type { Env } from './env';
 import type { GameAction, RoomRules, RoomState } from './game/types';
 
@@ -146,8 +146,7 @@ export class Room extends DurableObject<Env> {
     let changed = resolveAuction(state, now);
     if (maybeTransferHost(state, now)) changed = true;
     const current = state.players.find((p) => p.id === state.currentPlayerId);
-    const awayLongEnough = state.turnAwayAt != null && now + 500 >= state.turnAwayAt + SETTINGS.disconnectGraceMs;
-    if (awayLongEnough && state.status === 'playing' && state.phase !== 'finished' && state.phase !== 'await_auction' && current && !current.connected && !current.bankrupt) {
+    if (current && autoplayDue(state, now)) {
       const target = current.id;
       const rng = makeRng();
       try {
@@ -297,21 +296,8 @@ export class Room extends DurableObject<Env> {
   }
 
   private async arm(state: RoomState): Promise<void> {
-    const now = Date.now();
-    const times: number[] = [];
-    if (state.auction && state.phase === 'await_auction' && state.auction.endsAt > now) times.push(state.auction.endsAt);
-    const host = state.players.find((p) => p.isHost);
-    if (host && !host.connected && state.hostLeftAt != null) times.push(state.hostLeftAt + SETTINGS.hostGraceMs);
-    const current = state.players.find((p) => p.id === state.currentPlayerId);
-    const waiting =
-      state.status === 'playing' &&
-      state.phase !== 'finished' &&
-      state.phase !== 'await_auction' &&
-      current &&
-      !current.connected &&
-      !current.bankrupt;
-    if (waiting && state.turnAwayAt != null) times.push(state.turnAwayAt + SETTINGS.disconnectGraceMs);
-    if (times.length > 0) await this.ctx.storage.setAlarm(Math.min(...times));
+    const at = nextWakeAt(state, Date.now());
+    if (at != null) await this.ctx.storage.setAlarm(at);
     else await this.ctx.storage.deleteAlarm();
   }
 

@@ -204,35 +204,68 @@ export function touchHost(state: RoomState, now: number): void {
   }
 }
 
+/**
+ * 房主离线超过宽限时间，并且有别的在线玩家可以接手时，才把房主交出去。
+ * 没有人在线就不动：交给另一个离线的人没有意义，还会让闹钟一直空转。
+ */
 export function maybeTransferHost(state: RoomState, now: number): boolean {
   const host = state.players.find((p) => p.isHost);
   if (!host || host.connected || state.hostLeftAt == null) return false;
   if (now - state.hostLeftAt < SETTINGS.hostGraceMs) return false;
   const start = state.players.findIndex((p) => p.id === host.id);
   let next: Player | null = null;
-  for (let n = 1; n <= state.players.length; n += 1) {
+  for (let n = 1; n < state.players.length; n += 1) {
     const candidate = state.players[(start + n) % state.players.length];
     if (candidate && candidate.connected) {
       next = candidate;
       break;
     }
   }
-  if (!next) {
-    for (let n = 1; n <= state.players.length; n += 1) {
-      const candidate = state.players[(start + n) % state.players.length];
-      if (candidate) {
-        next = candidate;
-        break;
-      }
-    }
-  }
-  if (!next || next.id === host.id) return false;
+  if (!next) return false;
   host.isHost = false;
   next.isHost = true;
-  state.hostLeftAt = next.connected ? null : now;
+  state.hostLeftAt = null;
   pushLog(state, `${host.nickname} 离线较久，房主交给 ${next.nickname}`);
   state.seq += 1;
   return true;
+}
+
+/** 房间里还有没有人连着（玩家或观战都算）。 */
+export function anyoneConnected(state: RoomState): boolean {
+  return state.players.some((p) => p.connected) || state.spectators.some((s) => s.connected);
+}
+
+/** 当前行动的玩家掉线够久、而且房间里还有人在看时，才替他托管。没人在线就停在原地，等有人回来。 */
+export function autoplayDue(state: RoomState, now: number): boolean {
+  if (state.status !== 'playing' || state.phase === 'finished' || state.phase === 'await_auction') return false;
+  const current = state.players.find((p) => p.id === state.currentPlayerId);
+  if (!current || current.connected || current.bankrupt) return false;
+  if (state.turnAwayAt == null || now + 500 < state.turnAwayAt + SETTINGS.disconnectGraceMs) return false;
+  return anyoneConnected(state);
+}
+
+/**
+ * 房间下一次需要被叫醒的时间：拍卖到点、房主可以移交、掉线的人该托管。
+ * 没有要等的事返回 null。到点的事最早也排在 250 毫秒后，避免闹钟原地连续触发。
+ */
+export function nextWakeAt(state: RoomState, now: number): number | null {
+  const times: number[] = [];
+  if (state.phase === 'await_auction' && state.auction) times.push(state.auction.endsAt);
+  const host = state.players.find((p) => p.isHost);
+  const heir = state.players.some((p) => p.connected && !p.isHost);
+  if (host && !host.connected && state.hostLeftAt != null && heir) times.push(state.hostLeftAt + SETTINGS.hostGraceMs);
+  const current = state.players.find((p) => p.id === state.currentPlayerId);
+  const waiting =
+    state.status === 'playing' &&
+    state.phase !== 'finished' &&
+    state.phase !== 'await_auction' &&
+    current &&
+    !current.connected &&
+    !current.bankrupt &&
+    anyoneConnected(state);
+  if (waiting && state.turnAwayAt != null) times.push(state.turnAwayAt + SETTINGS.disconnectGraceMs);
+  if (!times.length) return null;
+  return Math.max(Math.min(...times), now + 250);
 }
 
 export function startGame(state: RoomState, byId: string, _rng: Rng): string | null {

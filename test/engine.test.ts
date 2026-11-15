@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { SQUARES } from '../src/game/content';
+import { SETTINGS, SQUARES } from '../src/game/content';
 import {
   apply,
   autoStep,
@@ -10,7 +10,11 @@ import {
   makeRng,
   marketDelta,
   marketQuote,
+  maybeTransferHost,
+  nextWakeAt,
+  anyoneConnected,
   auctionStartPrice,
+  autoplayDue,
   pickLiquidation,
   saleProceeds,
   startGame,
@@ -524,3 +528,62 @@ describe('卖给银行的价钱', () => {
     expect(saleProceeds(5, false, 0)).toBe(160);
   });
 });
+
+describe('闹钟不空转', () => {
+  test('房主一个人掉线后不再安排闹钟，也不会把房主交给自己', () => {
+    const state = createRoomState('AB234', '1');
+    const host = makePlayer('p0', '甲', 't0', COLORS[0]!, 'pebble', true);
+    state.players.push(host);
+    host.connected = false;
+    state.hostLeftAt = 1000;
+    const later = 1000 + SETTINGS.hostGraceMs + 5000;
+    expect(maybeTransferHost(state, later)).toBe(false);
+    expect(nextWakeAt(state, later)).toBeNull();
+  });
+
+  test('有别人在线才移交房主，交完就不再叫醒', () => {
+    const state = createRoomState('AB234', '1');
+    const host = makePlayer('p0', '甲', 't0', COLORS[0]!, 'pebble', true);
+    const other = makePlayer('p1', '乙', 't1', COLORS[1]!, 'pebble', false);
+    const away = makePlayer('p2', '丙', 't2', COLORS[2]!, 'pebble', false);
+    state.players.push(host, away, other);
+    host.connected = false;
+    away.connected = false;
+    state.hostLeftAt = 1000;
+    expect(nextWakeAt(state, 2000)).toBe(1000 + SETTINGS.hostGraceMs);
+    const later = 1000 + SETTINGS.hostGraceMs;
+    expect(maybeTransferHost(state, later)).toBe(true);
+    expect(other.isHost).toBe(true);
+    expect(away.isHost).toBe(false);
+    expect(nextWakeAt(state, later)).toBeNull();
+  });
+
+  test('所有人都离线时不托管、不叫醒；有人回来看才继续', () => {
+    const { state, A, B } = boot();
+    setTurn(state, A);
+    A.connected = false;
+    B.connected = false;
+    state.turnAwayId = A.id;
+    state.turnAwayAt = 1000;
+    const later = 1000 + SETTINGS.disconnectGraceMs + 1;
+    expect(anyoneConnected(state)).toBe(false);
+    expect(autoplayDue(state, later)).toBe(false);
+    expect(nextWakeAt(state, later)).toBeNull();
+    state.spectators.push({ id: 's1', nickname: '看客', token: 'ts', connected: true });
+    expect(autoplayDue(state, later)).toBe(true);
+    expect(nextWakeAt(state, later)).toBe(later + 250);
+  });
+
+  test('拍卖到点照样叫醒，过期的时间排到 250 毫秒后', () => {
+    const { state, A, B } = boot();
+    give(state, A, [1]);
+    setTurn(state, A);
+    A.connected = false;
+    B.connected = false;
+    expect(act(state, A.id, { type: 'auctionOwn', square: 1 })).toEqual({ ok: true });
+    const ends = state.auction!.endsAt;
+    expect(nextWakeAt(state, ends - 1000)).toBe(ends);
+    expect(nextWakeAt(state, ends + 5000)).toBe(ends + 5250);
+  });
+});
+
