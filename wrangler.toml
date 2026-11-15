@@ -1,6 +1,9 @@
 name = "monopoly"
 main = "src/index.ts"
 compatibility_date = "2026-11-01"
+# 只用自定义域名，不开 workers.dev 和预览地址。
+workers_dev = false
+preview_urls = false
 
 # 静态页面由 Worker 转发；/api/* 在 Worker 里处理。
 [assets]
