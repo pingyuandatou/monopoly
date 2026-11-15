@@ -1,7 +1,8 @@
 import { DurableObject } from 'cloudflare:workers';
 import { SETTINGS } from './game/content';
-import { apply, autoStep, autoplayDue, createRoomState, makePlayer, makeRng, maybeTransferHost, nextWakeAt, project, resolveAuction, setAppearance, startGame, touchHost, updateRules } from './game/engine';
+import { adminEndGame, apply, autoStep, autoplayDue, createRoomState, idleCleanupAt, kickPlayer, makePlayer, makeRng, maybeTransferHost, nextWakeAt, project, resolveAuction, setAppearance, startGame, touchHost, updateRules } from './game/engine';
 import type { Env } from './env';
+import { deleteRoom, summarize, upsertRoom } from './registry';
 import type { GameAction, RoomRules, RoomState } from './game/types';
 
 interface Att {
@@ -12,8 +13,15 @@ interface Att {
 }
 
 const NICK_RE = /^[\u4e00-\u9fa5A-Za-z0-9_\u00B7]{1,8}$/;
+/** 管理员删除房间、请人离开时，给客户端的关闭码。客户端看到这两个码就回首页，不再自动重连。 */
+const CLOSE_DELETED = 4001;
+const CLOSE_KICKED = 4003;
 
 export class Room extends DurableObject<Env> {
+  /** 上一次写进登记表的摘要和时间，用来少写几次。 */
+  private registered = '';
+  private registeredAt = 0;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
@@ -22,6 +30,8 @@ export class Room extends DurableObject<Env> {
   }
 
   override async fetch(request: Request): Promise<Response> {
+    const path = new URL(request.url).pathname;
+    if (path.startsWith('/admin/')) return this.handleAdmin(request, path.slice('/admin/'.length));
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('需要 WebSocket', { status: 426 });
     }
@@ -53,6 +63,7 @@ export class Room extends DurableObject<Env> {
       const att = (ws.deserializeAttachment() as Att | null) ?? { joined: false, roomCode: '' };
       let state = this.load();
       if (state) this.presence(state);
+      if (state && msg.type !== 'sync') state.lastActiveAt = Date.now();
 
       if (msg.type === 'join') {
         this.handleJoin(ws, att, state, msg);
@@ -141,8 +152,13 @@ export class Room extends DurableObject<Env> {
   override async alarm(): Promise<void> {
     const state = this.load();
     if (!state) return;
-    this.presence(state);
     const now = Date.now();
+    if (now >= idleCleanupAt(state)) {
+      console.log(`room ${state.roomCode} idle, removing`);
+      await this.wipe(state.roomCode, CLOSE_DELETED, '房间太久没人动，已经自动删除');
+      return;
+    }
+    this.presence(state);
     let changed = resolveAuction(state, now);
     if (maybeTransferHost(state, now)) changed = true;
     const current = state.players.find((p) => p.id === state.currentPlayerId);
@@ -163,8 +179,96 @@ export class Room extends DurableObject<Env> {
     if (changed) {
       this.save(state);
       this.broadcast(state);
+    } else {
+      this.register(state);
     }
     await this.arm(state);
+  }
+
+  /** 管理接口，只有 Worker 校验过密钥后才会转到这里。 */
+  private async handleAdmin(request: Request, action: string): Promise<Response> {
+    const state = this.load();
+    const code = new URL(request.url).searchParams.get('room')?.toUpperCase() ?? '';
+    if (action === 'delete') {
+      await this.wipe(state?.roomCode || code, CLOSE_DELETED, '房间已被管理员删除');
+      return Response.json({ ok: true });
+    }
+    if (!state) {
+      if (code) this.ctx.waitUntil(deleteRoom(this.env.DB, code).catch((err) => console.error('registry delete failed', err)));
+      return Response.json({ ok: false, error: '这个房间没有存档' }, { status: 404 });
+    }
+    if (action === 'state') {
+      this.presence(state);
+      return Response.json({ ok: true, room: adminView(state) });
+    }
+    if (request.method !== 'POST') return Response.json({ ok: false, error: '请用 POST' }, { status: 405 });
+    if (action === 'end') {
+      this.presence(state);
+      const err = adminEndGame(state);
+      if (err) return Response.json({ ok: false, error: err }, { status: 409 });
+      this.persist(state);
+      return Response.json({ ok: true, room: adminView(state) });
+    }
+    if (action === 'kick') {
+      const body = (await request.json().catch(() => null)) as { id?: unknown } | null;
+      const id = typeof body?.id === 'string' ? body.id : '';
+      this.presence(state);
+      const err = kickPlayer(state, id);
+      if (err) return Response.json({ ok: false, error: err }, { status: 409 });
+      for (const sock of this.ctx.getWebSockets()) {
+        const att = sock.deserializeAttachment() as Att | null;
+        if (att?.actorId !== id) continue;
+        this.send(sock, { type: 'kicked', message: '你被管理员移出了房间' });
+        try {
+          sock.close(CLOSE_KICKED, 'kicked');
+        } catch {
+          /* already gone */
+        }
+      }
+      this.presence(state);
+      this.persist(state);
+      return Response.json({ ok: true, room: adminView(state) });
+    }
+    return Response.json({ ok: false, error: '不认识这个操作' }, { status: 404 });
+  }
+
+  /** 断开所有人、清空存档和闹钟，再从登记表里去掉。 */
+  private async wipe(code: string, closeCode: number, message: string): Promise<void> {
+    for (const sock of this.ctx.getWebSockets()) {
+      this.send(sock, { type: 'kicked', message });
+      try {
+        sock.close(closeCode, 'removed');
+      } catch {
+        /* already gone */
+      }
+    }
+    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAll();
+    this.ensureSchema();
+    this.registered = '';
+    if (code) {
+      try {
+        await deleteRoom(this.env.DB, code);
+      } catch (err) {
+        console.error('registry delete failed', err);
+      }
+    }
+  }
+
+  /** 把房间摘要写进登记表。摘要没变时十分钟最多写一次。 */
+  private register(state: RoomState): void {
+    if (!this.env.DB) return;
+    const now = Date.now();
+    const sig = JSON.stringify(summarize(state));
+    if (sig === this.registered && now - this.registeredAt < 10 * 60_000) return;
+    this.registered = sig;
+    this.registeredAt = now;
+    this.ctx.waitUntil(
+      upsertRoom(this.env.DB, this.ctx.id.toString(), state, now).catch((err) => {
+        this.registered = '';
+        console.error('registry write failed', err);
+      }),
+    );
   }
 
   private handleJoin(ws: WebSocket, att: Att, state: RoomState | null, msg: Record<string, unknown>): void {
@@ -272,6 +376,7 @@ export class Room extends DurableObject<Env> {
       return att?.actorId === actorId;
     });
     ws.serializeAttachment({ joined: true, roomCode: state.roomCode, actorId, role } satisfies Att);
+    state.lastActiveAt = Date.now();
     this.presence(state);
     touchHost(state, Date.now());
     if (announce) this.note(state, announce);
@@ -402,6 +507,7 @@ export class Room extends DurableObject<Env> {
       'INSERT INTO room_state (id, json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json',
       JSON.stringify(state),
     );
+    this.register(state);
   }
 
   private fail(ws: WebSocket, message: string): void {
@@ -415,6 +521,38 @@ export class Room extends DurableObject<Env> {
       /* socket already closed */
     }
   }
+}
+
+/** 管理页看到的房间详情。去掉令牌，其余照实给。 */
+function adminView(state: RoomState) {
+  return {
+    roomCode: state.roomCode,
+    password: state.password,
+    status: state.status,
+    phase: state.phase,
+    rules: state.rules,
+    createdAt: state.createdAt,
+    lastActiveAt: state.lastActiveAt ?? state.createdAt,
+    turnIndex: state.turnIndex,
+    currentPlayerId: state.currentPlayerId,
+    winnerId: state.winnerId,
+    players: state.players.map((p) => ({
+      id: p.id,
+      nickname: p.nickname,
+      color: p.color,
+      cash: p.cash,
+      position: p.position,
+      bankrupt: p.bankrupt,
+      inJail: p.inJail,
+      connected: p.connected,
+      isHost: p.isHost,
+      lots: state.ownership.flatMap((own, index) =>
+        own.ownerId === p.id ? [{ index, houses: own.houses, mortgaged: own.mortgaged }] : [],
+      ),
+    })),
+    spectators: state.spectators.map((s) => ({ id: s.id, nickname: s.nickname, connected: s.connected })),
+    log: state.log.slice(-30),
+  };
 }
 
 function stillPlaying(state: RoomState): boolean {

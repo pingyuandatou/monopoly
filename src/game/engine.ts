@@ -245,10 +245,10 @@ export function autoplayDue(state: RoomState, now: number): boolean {
 }
 
 /**
- * 房间下一次需要被叫醒的时间：拍卖到点、房主可以移交、掉线的人该托管。
+ * 对局里下一件要到点的事：拍卖结束、房主可以移交、掉线的人该托管。
  * 没有要等的事返回 null。到点的事最早也排在 250 毫秒后，避免闹钟原地连续触发。
  */
-export function nextWakeAt(state: RoomState, now: number): number | null {
+export function gameWakeAt(state: RoomState, now: number): number | null {
   const times: number[] = [];
   if (state.phase === 'await_auction' && state.auction) times.push(state.auction.endsAt);
   const host = state.players.find((p) => p.isHost);
@@ -266,6 +266,111 @@ export function nextWakeAt(state: RoomState, now: number): number | null {
   if (waiting && state.turnAwayAt != null) times.push(state.turnAwayAt + SETTINGS.disconnectGraceMs);
   if (!times.length) return null;
   return Math.max(Math.min(...times), now + 250);
+}
+
+/** 房间空闲到这个时间就自动删除。 */
+export function idleCleanupAt(state: RoomState): number {
+  return (state.lastActiveAt ?? state.createdAt) + SETTINGS.idleCleanupHours * 3600_000;
+}
+
+/** 房间的闹钟：对局里的事和空闲清理，取早的那个。 */
+export function nextWakeAt(state: RoomState, now: number): number {
+  const game = gameWakeAt(state, now);
+  const idle = Math.max(idleCleanupAt(state), now + 250);
+  return game == null ? idle : Math.min(game, idle);
+}
+
+/**
+ * 管理员把一个人移出房间。观战的人直接去掉；开局前的玩家直接让出座位；
+ * 开局后的玩家按破产处理，名下的地退给银行。
+ */
+export function kickPlayer(state: RoomState, id: string): string | null {
+  const spectatorIndex = state.spectators.findIndex((s) => s.id === id);
+  if (spectatorIndex >= 0) {
+    const [gone] = state.spectators.splice(spectatorIndex, 1);
+    pushLog(state, `管理员请 ${gone!.nickname} 离开了观战`);
+    state.seq += 1;
+    return null;
+  }
+  const player = playerById(state, id);
+  if (!player) return '房间里没有这个人';
+  if (state.status === 'lobby') {
+    state.players = state.players.filter((p) => p.id !== id);
+    if (player.isHost && state.players.length) {
+      const heir = state.players.find((p) => p.connected) ?? state.players[0]!;
+      heir.isHost = true;
+      state.hostLeftAt = heir.connected ? null : Date.now();
+    }
+    pushLog(state, `管理员把 ${player.nickname} 移出了房间`);
+    state.seq += 1;
+    return null;
+  }
+  if (player.bankrupt) return '这位玩家已经出局了';
+  if (state.status === 'finished') return '这局已经结束';
+  const wasCurrent = state.currentPlayerId === player.id;
+  if (state.auction) {
+    if (state.auction.sellerId === player.id) {
+      state.auction = null;
+      if (state.phase === 'await_auction') state.phase = 'await_roll';
+    } else if (state.auction.highBidderId === player.id) {
+      state.auction.highBidderId = null;
+      state.auction.highBid = 0;
+    }
+  }
+  if (wasCurrent) {
+    state.debt = null;
+    state.pendingBuy = null;
+  }
+  releaseToBank(state, player.id);
+  player.cash = 0;
+  player.bankrupt = true;
+  player.inJail = false;
+  player.jailTurns = 0;
+  if (player.isHost) {
+    const heir = alive(state).find((p) => p.connected) ?? alive(state)[0];
+    if (heir) {
+      player.isHost = false;
+      heir.isHost = true;
+      state.hostLeftAt = heir.connected ? null : Date.now();
+    }
+  }
+  pushLog(state, `管理员把 ${player.nickname} 移出了对局，名下的地退给银行`);
+  const living = alive(state);
+  if (living.length <= 1) {
+    state.status = 'finished';
+    state.phase = 'finished';
+    state.winnerId = living[0]?.id ?? null;
+    state.auction = null;
+    state.debt = null;
+    state.pendingBuy = null;
+    state.rollAgain = false;
+    if (living[0]) pushLog(state, `${living[0].nickname} 赢得了这局`);
+  } else if (wasCurrent) {
+    advanceTurn(state);
+  }
+  state.seq += 1;
+  return null;
+}
+
+/** 管理员直接结束对局。按现金加上地和房的造价排名，第一名记为赢家。 */
+export function adminEndGame(state: RoomState): string | null {
+  if (state.status !== 'playing') return '对局没有在进行';
+  const living = alive(state);
+  const worth = (p: Player) =>
+    p.cash +
+    state.ownership.reduce((sum, own, index) => (own.ownerId === p.id ? sum + lotValue(index, own.houses) : sum), 0);
+  const ranked = [...living].sort((a, b) => worth(b) - worth(a));
+  state.status = 'finished';
+  state.phase = 'finished';
+  state.auction = null;
+  state.debt = null;
+  state.pendingBuy = null;
+  state.rollAgain = false;
+  state.bail = null;
+  state.winnerId = ranked[0]?.id ?? null;
+  pushLog(state, ranked[0] ? `管理员结束了这局。按现金加地产造价，${ranked[0].nickname} 第一` : '管理员结束了这局');
+  state.seq += 1;
+  return null;
 }
 
 export function startGame(state: RoomState, byId: string, _rng: Rng): string | null {

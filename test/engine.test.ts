@@ -10,6 +10,10 @@ import {
   makeRng,
   marketDelta,
   marketQuote,
+  adminEndGame,
+  gameWakeAt,
+  idleCleanupAt,
+  kickPlayer,
   maybeTransferHost,
   nextWakeAt,
   anyoneConnected,
@@ -538,7 +542,7 @@ describe('闹钟不空转', () => {
     state.hostLeftAt = 1000;
     const later = 1000 + SETTINGS.hostGraceMs + 5000;
     expect(maybeTransferHost(state, later)).toBe(false);
-    expect(nextWakeAt(state, later)).toBeNull();
+    expect(gameWakeAt(state, later)).toBeNull();
   });
 
   test('有别人在线才移交房主，交完就不再叫醒', () => {
@@ -550,12 +554,12 @@ describe('闹钟不空转', () => {
     host.connected = false;
     away.connected = false;
     state.hostLeftAt = 1000;
-    expect(nextWakeAt(state, 2000)).toBe(1000 + SETTINGS.hostGraceMs);
+    expect(gameWakeAt(state, 2000)).toBe(1000 + SETTINGS.hostGraceMs);
     const later = 1000 + SETTINGS.hostGraceMs;
     expect(maybeTransferHost(state, later)).toBe(true);
     expect(other.isHost).toBe(true);
     expect(away.isHost).toBe(false);
-    expect(nextWakeAt(state, later)).toBeNull();
+    expect(gameWakeAt(state, later)).toBeNull();
   });
 
   test('所有人都离线时不托管、不叫醒；有人回来看才继续', () => {
@@ -568,10 +572,10 @@ describe('闹钟不空转', () => {
     const later = 1000 + SETTINGS.disconnectGraceMs + 1;
     expect(anyoneConnected(state)).toBe(false);
     expect(autoplayDue(state, later)).toBe(false);
-    expect(nextWakeAt(state, later)).toBeNull();
+    expect(gameWakeAt(state, later)).toBeNull();
     state.spectators.push({ id: 's1', nickname: '看客', token: 'ts', connected: true });
     expect(autoplayDue(state, later)).toBe(true);
-    expect(nextWakeAt(state, later)).toBe(later + 250);
+    expect(gameWakeAt(state, later)).toBe(later + 250);
   });
 
   test('拍卖到点照样叫醒，过期的时间排到 250 毫秒后', () => {
@@ -582,8 +586,76 @@ describe('闹钟不空转', () => {
     B.connected = false;
     expect(act(state, A.id, { type: 'auctionOwn', square: 1 })).toEqual({ ok: true });
     const ends = state.auction!.endsAt;
-    expect(nextWakeAt(state, ends - 1000)).toBe(ends);
-    expect(nextWakeAt(state, ends + 5000)).toBe(ends + 5250);
+    expect(gameWakeAt(state, ends - 1000)).toBe(ends);
+    expect(gameWakeAt(state, ends + 5000)).toBe(ends + 5250);
+  });
+});
+
+describe('空闲清理', () => {
+  test('没有对局里的事时，闹钟排在最后活动后若干小时', () => {
+    const state = createRoomState('AB234', '1');
+    state.createdAt = 1000;
+    expect(idleCleanupAt(state)).toBe(1000 + SETTINGS.idleCleanupHours * 3600_000);
+    state.lastActiveAt = 5000;
+    expect(nextWakeAt(state, 6000)).toBe(5000 + SETTINGS.idleCleanupHours * 3600_000);
+    expect(nextWakeAt(state, 9e15)).toBe(9e15 + 250);
+  });
+});
+
+describe('管理员操作', () => {
+  test('开局后移出当前玩家：地退给银行，轮到下一位', () => {
+    const { state, A, players } = boot(['甲', '乙', '丙']);
+    const [, B] = players;
+    give(state, A, [1, 3]);
+    state.ownership[1]!.houses = 2;
+    setTurn(state, A);
+    expect(kickPlayer(state, A.id)).toBeNull();
+    expect(A.bankrupt).toBe(true);
+    expect(state.ownership[1]?.ownerId).toBeNull();
+    expect(state.ownership[1]?.houses).toBe(0);
+    expect(state.currentPlayerId).toBe(B!.id);
+    expect(A.isHost).toBe(false);
+    expect(state.players.some((p) => p.isHost && !p.bankrupt)).toBe(true);
+  });
+
+  test('只剩一人时移出另一位就直接结束', () => {
+    const { state, A, B } = boot();
+    setTurn(state, A);
+    expect(kickPlayer(state, B.id)).toBeNull();
+    expect(state.status).toBe('finished');
+    expect(state.winnerId).toBe(A.id);
+  });
+
+  test('开局前移出玩家会让出座位，房主换人', () => {
+    const state = createRoomState('AB234', '1');
+    const host = makePlayer('p0', '甲', 't0', COLORS[0]!, 'pebble', true);
+    const other = makePlayer('p1', '乙', 't1', COLORS[1]!, 'pebble', false);
+    state.players.push(host, other);
+    expect(kickPlayer(state, host.id)).toBeNull();
+    expect(state.players.map((p) => p.id)).toEqual(['p1']);
+    expect(other.isHost).toBe(true);
+  });
+
+  test('拍卖自己地的人被移出，拍卖取消', () => {
+    const { state, A, players } = boot(['甲', '乙', '丙']);
+    give(state, A, [1]);
+    setTurn(state, A);
+    expect(act(state, A.id, { type: 'auctionOwn', square: 1 })).toEqual({ ok: true });
+    expect(kickPlayer(state, A.id)).toBeNull();
+    expect(state.auction).toBeNull();
+    expect(state.phase).toBe('await_roll');
+    expect(state.currentPlayerId).toBe(players[1]!.id);
+  });
+
+  test('结束对局按现金加地产造价定赢家', () => {
+    const { state, A, B } = boot();
+    give(state, B, [39]);
+    state.ownership[39]!.houses = 2;
+    A.cash = 1500;
+    B.cash = 1000;
+    expect(adminEndGame(state)).toBeNull();
+    expect(state.status).toBe('finished');
+    expect(state.winnerId).toBe(B.id);
   });
 });
 

@@ -16,6 +16,12 @@ run_worker_first = true
 name = "ROOM"
 class_name = "Room"
 
+# 房间登记表：管理页从这里列出所有房间。用量和 Durable Objects 分开算。
+[[d1_databases]]
+binding = "DB"
+database_name = "monopoly-admin"
+database_id = "acdd43b9-cf03-4579-95c5-fd9c4f56c408"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Room"]

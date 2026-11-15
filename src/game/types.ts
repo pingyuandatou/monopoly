@@ -43,6 +43,8 @@ export interface Settings {
   auctionSeconds: number;
   auctionExtendSeconds: number;
   auctionMaxSeconds: number;
+  /** 房间多少小时没人动就自动删除。 */
+  idleCleanupHours: number;
   currency: string;
   playerColors: { id: string; hex: string; label: string }[];
   avatars: { id: string; label: string }[];
@@ -182,6 +184,8 @@ export interface RoomState {
   winnerId: string | null;
   turnIndex: number;
   createdAt: number;
+  /** 最近一次有人进房或操作的时间。旧存档没有这个字段，按 createdAt 算。 */
+  lastActiveAt?: number;
   logSeq: number;
   chatSeq: number;
 }

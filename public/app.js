@@ -41,6 +41,7 @@ let editingRules = false;
 let seenChat = null;
 let unread = 0;
 let auctionTicker = 0;
+let kickedMessage = '';
 let session = { roomCode: '', nickname: '', password: '', token: '' };
 
 boot();
@@ -210,11 +211,28 @@ function connect(roomCode, nickname, password, token) {
       busy = false;
       if (!welcomed) showHomeError(msg.message);
       else toast(msg.message);
+    } else if (msg.type === 'kicked') {
+      kickedMessage = msg.message;
     }
   });
-  ws.addEventListener('close', () => {
+  ws.addEventListener('close', (event) => {
     setBusy(false);
     busy = false;
+    if (event.code === 4001 || event.code === 4003) {
+      if (event.code === 4001) {
+        try {
+          localStorage.removeItem(storageKey(session.roomCode, session.nickname));
+          localStorage.removeItem('dafuweng:last');
+        } catch {
+          /* 存不了也没关系 */
+        }
+        document.getElementById('btn-resume').hidden = true;
+      }
+      leave();
+      showHomeError(kickedMessage || (event.code === 4001 ? '房间已被删除' : '你被移出了房间'));
+      kickedMessage = '';
+      return;
+    }
     if (manualClose) return;
     if (!welcomed) {
       showHomeError(homeError.textContent || '没能进入房间');

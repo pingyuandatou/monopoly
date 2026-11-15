@@ -9,6 +9,7 @@
   "auctionSeconds": 15,
   "auctionExtendSeconds": 5,
   "auctionMaxSeconds": 30,
+  "idleCleanupHours": 72,
   "currency": "¥",
   "playerColors": [
     { "id": "red", "hex": "#e24b4b", "label": "赤" },
